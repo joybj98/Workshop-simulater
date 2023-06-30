@@ -31,8 +31,8 @@ if 'num_of_i' not in state:
 if 'group' not in state:
     state.group = None
 
-if 'current_proposal' not in state:
-    state.current_proposal = [[0, 0], [0, 0]]
+if 'consensus_proposal' not in state:
+    state.consensus_proposal = [[0, 0], [0, 0]]
 
 if 'saved_proposal' not in state:
     state.saved_proposal = [base_proposal.copy()]*5
@@ -45,20 +45,15 @@ if 'saving' not in state:
 
 
 def make_it_start():
-    with open('results/Id.txt', 'w') as f:
-        f.write(f'{state.num_of_c}\n{state.num_of_i}')
-
     state.started = True
-    start_button = st.empty()
-    state.starttime = time.time()
 
 
 def make_it_proposing():
     state.proposing = True
 
 
-def save_proposal(proposal):
-    state.current_proposal = proposal
+def save_consensus_proposal(proposal):
+    state.consensus_proposal = proposal
 
 
 def make_it_saving():
@@ -151,7 +146,7 @@ else:
 
     st.write('現在の合意の設計案:')
     st.write(
-        f'住民側の便益：{state.current_proposal[1][0]} ~ {state.current_proposal[1][1]} 万円')
+        f'住民側の便益：{state.consensus_proposal[1][0]*0.0001:.02f} ~ {state.consensus_proposal[1][1]*0.0001:.02f} 億円')
 
     input_values = {
         'n_cars': n_cars,
@@ -182,10 +177,10 @@ else:
 
         profit, benefit = main(input_values, input_ranges, need, state.group)
         down, up = get_benefit(benefit)
-        st.write(f'住民側の便益：{down:.2f} ~ {up:.2f} 万円')
+        st.write(f'住民側の便益：{down*0.0001:.2f} ~ {up*0.0001:.2f} 万円')
         state.proposing = False
 
-        st.button('合意した設計案を保存する', on_click=save_proposal, args=(
+        st.button('合意した設計案を保存する', on_click=save_consensus_proposal, args=(
             [[profit*0.7, profit*1.2], [down, up]],))
 
         if st.button('提案を左側に保存', on_click=make_it_saving) or state.saving:
