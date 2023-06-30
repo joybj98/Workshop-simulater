@@ -46,10 +46,10 @@ if 'saving' not in state:
 
 
 def make_it_start():
-    if not os.path.exists(f'results/{state.num_of_c}'):
-        os.mkdir(f'results/{state.num_of_c}')
+    if not os.path.exists(f'../results/{state.num_of_c}'):
+        os.mkdir(f'../results/{state.num_of_c}')
 
-    with open(f'results/{state.num_of_c}/Id.txt', 'w') as f:
+    with open(f'../results/{state.num_of_c}/Id.txt', 'w') as f:
         f.write(f'{state.num_of_c}\n{state.num_of_i}\n{state.group}')
 
     state.started = True
