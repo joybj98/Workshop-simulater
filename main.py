@@ -45,7 +45,7 @@ input_ranges = {
     'once_fare': range(0, 3001)  # yen
 }
 
-need = pd.read_csv('trip_data.csv')
+need = pd.read_csv('Workshop-simulator/trip_data.csv')
 
 
 def compute_duration(start_time, end_time):
