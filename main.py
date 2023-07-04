@@ -9,6 +9,7 @@ from scipy.integrate import quad
 from scipy import interpolate
 from itertools import product
 from tqdm import tqdm
+import scipy.stats as st
 import random
 """
 Consider add these later
@@ -19,10 +20,14 @@ Consider add these later
 # a design option: if easy for elder
 
 """
+np.random.seed(42)
+all_need = np.load('Workshop-simulator/random_need.npy', mmap_mode='r')
+
+base_need = pd.read_csv('Workshop-simulator/trip_data.csv')
 
 input_ranges = {
     # more cost, and able to satisfy more demand
-    'n_cars': range(0, 1001, 10),
+    'n_cars': range(0, 10001, 10),
 
     # time depends how many demand the cars are serving
 
@@ -44,8 +49,6 @@ input_ranges = {
     # lead to lower demand
     'once_fare': range(0, 3001)  # yen
 }
-
-need = pd.read_csv('Workshop-simulator/trip_data.csv')
 
 
 def compute_duration(start_time, end_time):
@@ -121,7 +124,7 @@ def real_demand_function(fare):
         f = 4000*fare-200
     idx = integrate_normal_distribution(f, float('inf'), 0, 200)
 
-    return (idx+0.25)*0.8  # to make 1>new need>0.2
+    return idx
 
 
 def get_interpolated_demand_fuction():
@@ -160,7 +163,7 @@ class Model():
         'charge_on_road': True,
         'service_lev': 5,
         'once_fare': 500,
-    }, need=pd.DataFrame(), group='A', car_speed=24, car_sharing_rate=1.5, years=10, ) -> None:
+    }, need=pd.DataFrame(), car_speed=24, car_sharing_rate=1.5, years=10, ) -> None:
         """
         Initializes the Model with the given input values.
         """
@@ -201,8 +204,10 @@ class Model():
         self.car_sharing_rate = car_sharing_rate
         self.calculation_years = years
         need['datetime'] = pd.to_datetime(need['時間'], format='%H:%M')
+
         self.weekday_need = need[need['weekday'] == 1]
         self.holiday_need = need[need['weekday'] == 0]
+
         self.interpolated_demand_fuction = interpolated_demand_fuction
 
     # service_effect: Computes the effective need based on the service level.
@@ -229,10 +234,10 @@ class Model():
         """
         # Compute the discounted price per item.
         discounted_price = base_price * \
-            (1 - discount_factor * (n_items ** 0.5))
+            (float(n_items/1000) ** -discount_factor)
 
-        # Ensure the price does not go below 0.4*base_price.
-        discounted_price = max(discounted_price, 0.4*base_price)
+        # Ensure the price does not go below 0.3*base_price.
+        discounted_price = max(discounted_price, 0.3*base_price)
 
         # Compute the total cost.
         total_cost = n_items * discounted_price
@@ -326,8 +331,8 @@ class Model():
 
         car_cost = self.bulk_order_total_cost(n_cars, 600, 0.1)
         # Additional cost of the service, depending on the service level.
-        service_cost = n_cars * service_lev / 80 * 600 * years
-        # service_lev 1-10 : 100-10 car assign 1 service person
+        service_cost = n_cars * service_lev / 20 * 600 * years
+        # service_lev 1-10 : 200-20 car assign 1 service person
 
         # Running cost, depending on the total run time on weekdays and holidays.
         run_cost = weekday_run_time * 2/3 * n_cars + holiday_run_time / 3 * n_cars
@@ -381,7 +386,7 @@ def check_input_range(input_values, input_ranges):
 
 
 def fit_time_fare_plot(input_values, need, type='profit'):
-    n_cars_range = np.arange(0, 1001, 100)  # range of car numbers
+    n_cars_range = np.arange(1, 10001, 100)  # range of car numbers
     service_lev_range = np.arange(1, 11, 2)  # range of service levels
 
     # Initialize arrays for various metrics
@@ -399,7 +404,7 @@ def fit_time_fare_plot(input_values, need, type='profit'):
     plt.rcParams['axes.grid'] = True
     fig, axs = plt.subplots(2, 5, figsize=(20, 10), sharey=True)
 
-    for i, service_lev in enumerate(service_lev_range):
+    for i, service_lev in tqdm(enumerate(service_lev_range)):
         for j, charge_on_road in enumerate([True, False]):
             # Calculate metrics for all car numbers
             for k, n_cars in enumerate(n_cars_range):
@@ -544,24 +549,69 @@ def all_consensus_plot(input_values, input_ranges, need, step_sizes={
     plt.show()
 
 
-def main(input_values, input_ranges, need, group):
+def main(input_values, input_ranges, all_need, base_need, mode):
+    np.random.seed(42)
     if not check_input_range(input_values, input_ranges):
         raise ValueError("One or more input values are out of range")
 
-    # demand_plot(input_values, )
+    need = base_need.copy()
 
-    # fit_time_fare_plot(input_values, 'benefit')
-    # all_consensus_plot(input_values, input_ranges, need)
-    m = Model(input_values, need, group)
-    m.run()
-    return m.output()
+    if mode == 'A':
+        num = 20
+        citi_num = num//2
+        profit = [None]*num
+        benefit = [None]*num
+        bad_benefit = [None]*citi_num
+
+        random_idx = np.random.choice(len(all_need), size=num)
+
+        for i in range(num):
+            need['トリップ数'] = all_need[random_idx[i]]
+            m = Model(input_values, need)
+            m.run()
+            profit[i], benefit[i] = m.output()
+
+        bad_benefit = benefit[:citi_num]
+
+        ret_profit = st.t.interval(
+            confidence=0.95, df=num-1, loc=np.mean(profit), scale=st.tstd(profit)/np.sqrt(num))
+
+        ret_benefit = st.t.interval(
+            confidence=0.95, df=num-1, loc=np.mean(benefit), scale=st.tstd(benefit)/np.sqrt(num))
+
+        ret_bad_benefit = st.t.interval(
+            confidence=0.95, df=citi_num-1, loc=np.mean(bad_benefit), scale=st.tstd(bad_benefit)/np.sqrt(citi_num))
+
+        return np.array(ret_profit), np.array(ret_benefit), np.array(ret_bad_benefit)
+
+    elif mode == 'B':
+        num = 20
+        profit = [None]*num
+        benefit = [None]*num
+        random_idx = np.random.choice(len(all_need), size=num)
+
+        for i in range(num):
+            need['トリップ数'] = all_need[random_idx[i]]
+            m = Model(input_values, need)
+            m.run()
+            profit[i], benefit[i] = m.output()
+
+        ret_profit = st.t.interval(
+            confidence=0.95, df=num-1, loc=np.mean(profit), scale=st.tstd(profit)/np.sqrt(num))
+
+        ret_benefit = st.t.interval(
+            confidence=0.95, df=num-1, loc=np.mean(benefit), scale=st.tstd(benefit)/np.sqrt(num))
+
+        return np.array(ret_profit), np.array(ret_benefit), np.array(ret_benefit)
+    else:
+        raise ValueError("mode should be A or B")
 
 
 if __name__ == '__main__':
-    need = pd.read_csv('trip_data.csv')
+    need = pd.read_csv('Workshop-simulator/trip_data.csv')
 
     input_values = {
-        'n_cars': 300,
+        'n_cars': 3000,
         'weekday_starthour': 8,
         'weekday_startmin': 30,
         'weekday_endhour': 18,
@@ -575,29 +625,31 @@ if __name__ == '__main__':
         'once_fare': 500,
     }
 
+    main(input_values, input_ranges, all_need, base_need, 'A')
+
     # fit_time_fare_plot(input_values, need, 'both')
     # all_consensus_plot(input_values, input_ranges, need)
-    fig, ax1 = plt.subplots()
-    ax1.set_xlabel('運賃（万円）')
-    ax2 = ax1.twinx()
-    ff = np.arange(0, 0.3, 0.001)
-    y = []
-    k = []
+    # fig, ax1 = plt.subplots()
+    # ax1.set_xlabel('運賃（万円）')
+    # ax2 = ax1.twinx()
+    # ff = np.arange(0, 0.3, 0.001)
+    # y = []
+    # k = []
 
-    for i, f in enumerate(ff):
+    # for i, f in enumerate(ff):
 
-        y.append(interpolated_demand_fuction(f))
-        if i < len(ff)-1:
-            new_demand = interpolated_demand_fuction(ff[i+1])
-            demand = interpolated_demand_fuction(f)
-            k.append(((new_demand-demand)/demand)/((ff[i+1]-f)/f))
+    #     y.append(interpolated_demand_fuction(f))
+    #     if i < len(ff)-1:
+    #         new_demand = interpolated_demand_fuction(ff[i+1])
+    #         demand = interpolated_demand_fuction(f)
+    #         k.append(((new_demand-demand)/demand)/((ff[i+1]-f)/f))
 
-    ax1.plot(ff, y, color='r', label='demand')
-    ax2.plot(ff[1:], k, color='b', label='elasticity')
+    # ax1.plot(ff, y, color='r', label='demand')
+    # ax2.plot(ff[1:], k, color='b', label='elasticity')
 
-    ax1.set_ylabel('需要量（価格が0の際の需要量が1）')
-    ax2.set_ylabel('需要の価格弾力性')
-    ax1.legend(loc='upper left')
-    ax2.legend(loc='upper right')
-    fig.tight_layout()
-    plt.show()
+    # ax1.set_ylabel('需要量（価格が0の際の需要量が1）')
+    # ax2.set_ylabel('需要の価格弾力性')
+    # ax1.legend(loc='upper left')
+    # ax2.legend(loc='upper right')
+    # fig.tight_layout()
+    # plt.show()
