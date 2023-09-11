@@ -108,7 +108,7 @@ if 'df' not in state:
 
 
 def in_workshop():
-
+    st.sidebar.write('残り時間', 30 - int(time.time()-state.starttime)/60, '分')
     st.sidebar.number = int(st.sidebar.radio(
         '保存した提案', [f'提案{i}' for i in range(1, 6)])[2])-1
 
@@ -223,7 +223,7 @@ def in_workshop():
         benefit *= 0.0001
 
         st.write(
-            f'企業側の利益：{profit[0]:.02f} ~ {profit[1]:.02f} 兆円')
+            f'事業側の利益：{profit[0]:.02f} ~ {profit[1]:.02f} 兆円')
         st.write(
             f'住民側の便益：{benefit[0]:.02f} ~ {benefit[1]:.02f} 兆円')
         state.checking = False
@@ -255,9 +255,20 @@ def in_workshop():
         f'{the_other_role}は提案を受け入れましたか？', ('Yes', 'No'), on_change=make_it_proposing, args=(role,))
 
     if st.button('書き出し', on_click=make_it_proposing, args=(role,)):
-        state.df = pd.concat([state.df, pd.DataFrame([{'提案者': role, 'time': time.time(
-        ), **input_values, 'if_accept': if_accept}])], ignore_index=True)
-        if if_accept:
+        state.df = pd.concat([state.df, pd.DataFrame([
+            {'提案者': role,
+             'time': time.time()-state.starttime,
+             **input_values,
+             'if_accept': if_accept, }])],
+            ignore_index=True)
+
+        profit, benefit, _ = main(input_values, input_ranges,
+                                  all_need, base_need, state.group)
+
+        profit *= 0.0001
+        benefit *= 0.0001
+
+        if if_accept == 'Yes':
             state.current_proposal = [profit, benefit]
 
         st.success('書き出し完了')
@@ -288,8 +299,9 @@ def in_workshop():
 
 # 開始ボタンが押されていない場合、開始のページを表示
 if not state.started:
-    state.num_of_c = st.text_input('住民側の番号を入力してください')
-    state.num_of_i = st.text_input('事業側の番号を入力してください')
+    st.write('あなたは事業側で、相手が住民側です。')
+    state.num_of_i = st.text_input('あなたの番号を入力してください')
+    state.num_of_c = st.text_input('相手の番号を入力してください')
     state.group = st.radio('グループ番号を選択してください', ('A', 'B'))
 
     st.write('開始ボタンを押すと時間の計測が始まりますので、開始しない限りは押さないこと')

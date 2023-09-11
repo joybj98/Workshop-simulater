@@ -1,16 +1,16 @@
 import numpy as np
 import pandas as pd
-from myfunc import *
 import datetime as dt
 import matplotlib.pyplot as plt
 import japanize_matplotlib
 from scipy.stats import norm
 from scipy.integrate import quad
 from scipy import interpolate
-from itertools import product
+from itertools import product, chain
 from tqdm import tqdm
 import scipy.stats as st
 import random
+import os
 """
 Consider add these later
 
@@ -20,6 +20,8 @@ Consider add these later
 # a design option: if easy for elder
 
 """
+if os.getcwd().split('/')[-1] == 'Workshop-simulator':
+    os.chdir('..')
 np.random.seed(42)
 all_need = np.load('Workshop-simulator/random_need.npy', mmap_mode='r')
 
@@ -200,7 +202,7 @@ class Model():
         self.type = type
 
         self.car_speed = car_speed
-        # no car sharing = 2 つまり、往復(=2)しないと新しい乗客を乗せられない
+        # no car sharing, rate = 2 つまり、往復(=2)しないと新しい乗客を乗せられない
         self.car_sharing_rate = car_sharing_rate
         self.calculation_years = years
         need['datetime'] = pd.to_datetime(need['時間'], format='%H:%M')
@@ -237,7 +239,7 @@ class Model():
             (float(n_items/1000) ** -discount_factor)
 
         # Ensure the price does not go below 0.3*base_price.
-        discounted_price = max(discounted_price, 0.3*base_price)
+        discounted_price = max(discounted_price, 0.5*base_price)
 
         # Compute the total cost.
         total_cost = n_items * discounted_price
@@ -324,10 +326,15 @@ class Model():
         holiday_run_time = self.holiday_run_time
 
         # Basic cost of maintaining the fleet of cars, adjusted by the number of cars.
-        if self.charge_on_road:
-            base_cost = 12_0000
+        # 　千葉県平方kmあたり道路延長*柏市面積*1mあたりの整備価格(20000)＋充電設備(500万円)+システム開発(10名＊月給50万＊12ヶ月　＝　6000万
+
+        # https://www.mlit.go.jp/road/ir/ir-data/tokei-nen/2015/pdf/fuhyou01.pdf
+        if not self.charge_on_road:
+            base_cost = 474.6*114.7*2 + 50*n_cars+6000
         else:
-            base_cost = 5_0000 + 5000 * np.log1p(n_cars)
+            # 上記で、整備価格を2倍にし、充電設備を0にした
+            base_cost = 474.6*114.7*4+6000
+            # つまり、n_cars　が1089以上だと、charge_on_roadの方が安い
 
         car_cost = self.bulk_order_total_cost(n_cars, 600, 0.1)
         # Additional cost of the service, depending on the service level.
@@ -335,8 +342,9 @@ class Model():
         # service_lev 1-10 : 200-20 car assign 1 service person
 
         # Running cost, depending on the total run time on weekdays and holidays.
-        run_cost = weekday_run_time * 2/3 * n_cars + holiday_run_time / 3 * n_cars
-        run_cost *= 10*years
+        # 1kmあたり5円
+        runhour_perday = weekday_run_time * 2/3 + holiday_run_time / 3
+        run_cost = runhour_perday*years*365*self.car_speed*5 * n_cars/10000
 
         self.base_cost = base_cost
         self.car_cost = car_cost
@@ -421,8 +429,9 @@ def fit_time_fare_plot(input_values, need, type='profit'):
                 axs[j, i].plot(n_cars_range, revenues, label='Revenue')
                 axs[j, i].plot(n_cars_range, costs, label='Cost')
                 axs[j, i].plot(n_cars_range, profits, label='Profit')
-                print(revenues, costs)
-
+                # print(revenues, costs)
+                axs[j, i].set_title(
+                    f'Service Lev: {service_lev}, Charge on Road: {charge_on_road}')
                 title = 'Profit for fixed fare and runtime'
 
             elif type == 'cost':
@@ -482,6 +491,52 @@ def demand_plot(input_values):
     plt.show()
 
 
+def uncentainty_plot(all_need, base_need, input_ranges, input_values):
+
+    input_data_set = []
+    once_fare_range = np.arange(0, 1001, 100)
+
+    for i, once_fare in enumerate(once_fare_range):
+        input_values.update({'once_fare': once_fare})
+        input_data_set.append(input_values.copy())
+
+    n = len(input_data_set)
+    side = 5
+    error_list = []
+    bad_error_list = []
+    y = []
+    bad_y = []
+    ratio = []
+
+    for input_value in tqdm(input_data_set):
+        _, benefit, bad_benefit = main(
+            input_value, input_ranges, all_need, base_need, 'interim')
+        y.append(benefit.mean())
+        bad_y.append(bad_benefit.mean())
+        benefit = np.percentile(benefit, [side, 100-side])
+        bad_benefit = np.percentile(bad_benefit, [side, 100-side])
+
+        error_list.append((benefit[1] - benefit[0])*0.5)
+        bad_error_list.append((bad_benefit[1] - bad_benefit[0])*0.5)
+        ratio.append(abs(benefit[1] - benefit[0]) /
+                     abs(bad_benefit[1] - bad_benefit[0]))
+
+    print(np.mean(ratio))
+    fig, ax = plt.subplots(1, 1)
+
+    ax.errorbar(x=np.arange(0, 3*n, 3),
+                y=y, yerr=error_list, fmt='.', label='more information', color='blue')
+
+    ax.errorbar(x=np.arange(1, 3*n+1, 3), y=bad_y, yerr=np.array(bad_error_list).T,
+                fmt='.', label='less information', color='red')
+    ax.set_xticks(np.arange(0, 3*n, 3))
+    ax.set_xticklabels(once_fare_range)
+    ax.set_xlabel('Once Fare')
+    ax.set_ylabel("Citizen's Benefit")
+    plt.legend()
+    plt.show()
+
+
 def all_consensus_plot(input_values, input_ranges, need, step_sizes={
     'n_cars': 300,
     'weekday_starthour': 4,
@@ -527,7 +582,6 @@ def all_consensus_plot(input_values, input_ranges, need, step_sizes={
         m = Model(input_values, need)
         m.run()
         # Compute profit and benefit
-        # print(m.output())
         profits[i], benefits[i] = m.output()
         if benefits[i] < 0:
             print(m.travel_benefit, m.time_benefit, m.revenue)
@@ -556,9 +610,48 @@ def main(input_values, input_ranges, all_need, base_need, mode):
 
     need = base_need.copy()
 
-    if mode == 'A':
-        num = 20
-        citi_num = num//2
+    '''
+    ========== 以下は中間審査専用 ==========
+    '''
+    if mode == 'interim':
+        good_k = np.random.normal(0, 0.18686868686868688, size=1000)
+        bad_k = np.random.normal(0, 0.4646464646464647, size=1000)
+        new_need = need.copy()['トリップ数'].to_numpy()
+        good_need = np.array([new_need*np.exp(k) for k in good_k])
+        bad_need = np.array([new_need*np.exp(k) for k in bad_k])
+
+        num = 500
+        profit = [None]*num
+        benefit = [None]*num
+        bad_benefit = [None]*num
+        random_idx = np.random.choice(len(good_need), size=num)
+
+        for i in tqdm(range(num)):
+            need['トリップ数'] = good_need[random_idx[i]]
+            m = Model(input_values, need)
+            m.run()
+            profit[i], benefit[i] = m.output()
+
+            need['トリップ数'] = bad_need[random_idx[i]]
+            m = Model(input_values, need)
+            m.run()
+            _, bad_benefit[i] = m.output()
+
+        # return np.array(profit), np.percentile(benefit, [2.5, 97.5]), np.percentile(bad_benefit, [30, 70])
+        # fig, axs = plt.subplots(2, 1)
+        # axs[0].hist(benefit, 10, label='good')
+        # axs[1].hist(bad_benefit, 10, label='bad')
+        # plt.legend()
+        # plt.show()
+        return np.array(profit), np.array(benefit), np.array(bad_benefit)
+        '''
+        ========== 以上は中間審査専用 ==========
+        '''
+
+    elif mode == 'A':
+        # 対象組
+        num = 150
+        citi_num = num//3
         profit = [None]*num
         benefit = [None]*num
         bad_benefit = [None]*citi_num
@@ -571,20 +664,23 @@ def main(input_values, input_ranges, all_need, base_need, mode):
             m.run()
             profit[i], benefit[i] = m.output()
 
-        bad_benefit = benefit[:citi_num]
+        bad_benefit = np.random.choice(benefit, size=citi_num, replace=False)
 
-        ret_profit = st.t.interval(
-            confidence=0.95, df=num-1, loc=np.mean(profit), scale=st.tstd(profit)/np.sqrt(num))
+        # ret_profit = st.t.interval(
+        #     confidence=0.95, df=num-1, loc=np.mean(profit), scale=st.tstd(profit)/np.sqrt(num))
 
-        ret_benefit = st.t.interval(
-            confidence=0.95, df=num-1, loc=np.mean(benefit), scale=st.tstd(benefit)/np.sqrt(num))
+        # ret_benefit = st.t.interval(
+        #     confidence=0.95, df=num-1, loc=np.mean(benefit), scale=st.tstd(benefit)/np.sqrt(num))
 
-        ret_bad_benefit = st.t.interval(
-            confidence=0.95, df=citi_num-1, loc=np.mean(bad_benefit), scale=st.tstd(bad_benefit)/np.sqrt(citi_num))
+        # ret_bad_benefit = st.t.interval(
+        #     confidence=0.95, df=citi_num-1, loc=np.mean(bad_benefit), scale=st.tstd(bad_benefit)/np.sqrt(citi_num))
 
-        return np.array(ret_profit), np.array(ret_benefit), np.array(ret_bad_benefit)
+        # return np.array(ret_profit), np.array(ret_benefit), np.array(ret_bad_benefit)
+
+        return np.array(profit), np.percentile(benefit, [30, 70]), np.percentile(bad_benefit, [30, 70])
 
     elif mode == 'B':
+        # 実験組
         num = 20
         profit = [None]*num
         benefit = [None]*num
@@ -603,15 +699,32 @@ def main(input_values, input_ranges, all_need, base_need, mode):
             confidence=0.95, df=num-1, loc=np.mean(benefit), scale=st.tstd(benefit)/np.sqrt(num))
 
         return np.array(ret_profit), np.array(ret_benefit), np.array(ret_benefit)
+
+    elif mode == 'raw':
+        num = 20
+        profit = [None]*num
+        benefit = [None]*num
+        random_idx = np.random.choice(len(all_need), size=num)
+
+        for i in tqdm(range(num)):
+            need['トリップ数'] = all_need[random_idx[i]]
+            m = Model(input_values, need)
+            m.run()
+            profit[i], benefit[i] = m.output()
+
+        return profit, benefit
+
     else:
         raise ValueError("mode should be A or B")
 
 
 if __name__ == '__main__':
+    if os.getcwd().split('/')[-1] == 'Workshop-simulator':
+        os.chdir('..')
     need = pd.read_csv('Workshop-simulator/trip_data.csv')
 
     input_values = {
-        'n_cars': 3000,
+        'n_cars': 8000,
         'weekday_starthour': 8,
         'weekday_startmin': 30,
         'weekday_endhour': 18,
@@ -625,9 +738,15 @@ if __name__ == '__main__':
         'once_fare': 500,
     }
 
-    main(input_values, input_ranges, all_need, base_need, 'A')
+    # x, y = main(input_values, input_ranges, all_need, base_need, 'raw')
+    # fig, axs = plt.subplots(2)
+    # axs[0].hist(x)
+    # axs[1].hist(y)
 
-    # fit_time_fare_plot(input_values, need, 'both')
+    # plt.show()
+
+    fit_time_fare_plot(input_values, need, 'cost')
+    # uncentainty_plot(all_need, base_need, input_ranges, input_values)
     # all_consensus_plot(input_values, input_ranges, need)
     # fig, ax1 = plt.subplots()
     # ax1.set_xlabel('運賃（万円）')
